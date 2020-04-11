@@ -1,0 +1,227 @@
+---
+title: 'Analysis Replication File - Proactive Policies for Safeguarding Democracy in Taiwan'
+author: "Travis Dorsey"
+date: "3/31/2020"
+output: 
+  html_document:
+    fig_retina = 1
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+# Set path for saving local copies of the plots
+knitr::opts_knit$set(base.dir = "/Users/sharedcomputer/MMT in Taiwan/Blog Photos")
+
+## Load required libraries
+library(readr)
+library(janitor)
+library(tidyverse)
+library(scales)
+library(lubridate)
+library(tsbox)
+library(knitr)
+library(kableExtra)
+library(directlabels)
+library(showtext)
+font_install(source_han_serif())
+```
+
+# Analysis File for Proactive Policies for Safeguarding Democracy in Taiwan
+This is a companion file to the series of posts on Proactive Policies for Safeguarding Democracy in Taiwan. All of the original analyses and data wrangling are performed here and should be easy to replicate.
+
+## Part 1: How the Populist Wave Came to Taiwan
+
+```{r tw_gini_fig, fig.showtext = TRUE}
+## Download necessary datasets from my github
+inequality_url <- "https://raw.githubusercontent.com/dorseytf/TaiwanMMT/master/Taiwan%20Income%20Inequality%20Data.csv"
+
+tw_gini_df <- read_csv(url(inequality_url))[, c(1,2,8,9)] %>%
+  gather("inequality_measure", "value", -c(Year, Metric)) %>%
+  filter(!is.na(value)) %>%
+  clean_names() %>%
+  mutate(inequality_measure = str_wrap(inequality_measure, 40))
+
+gini_metric_translation <- tibble(eng_name = unique(tw_gini_df$metric),
+                                  zh_name  = "戶數五等分位組之平均每戶可支配所得")
+
+inequality_translation <- tibble(eng_name  = unique(tw_gini_df$inequality_measure),
+                                 zh_name   = c("基尼係數",
+                                               "或者前20％與後20％的收入份額比率"))
+
+tw_gini_df_zh <- tw_gini_df %>%
+  left_join(inequality_translation, by = c("inequality_measure"="eng_name")) %>%
+  mutate(inequality_measure = zh_name) %>%
+  select(-zh_name) %>%
+  left_join(gini_metric_translation, by = c("metric"="eng_name")) %>%
+  mutate(metric = zh_name) %>%
+  select(-zh_name)
+
+tw_gini_df %>%
+  ggplot(aes(x = year, y = value, color = inequality_measure)) +
+  geom_line() +
+  facet_wrap(~inequality_measure, scales = "free") +
+  scale_color_viridis_d() +
+  guides(color = "none") +
+  labs(title = "Measures of Income Inequality in Taiwan",
+       x = " ",
+       y = "Inequality Measure Value")
+ggsave("/Users/sharedcomputer/MMT in Taiwan/Blog Photos/Measures of Income Inequality for Taiwan.jpg")
+
+showtext_auto()
+
+tw_gini_df_zh %>%
+  ggplot(aes(x = year, y = value, color = inequality_measure)) +
+  geom_line() +
+  facet_wrap(~inequality_measure, scales = "free") +
+  scale_color_viridis_d() +
+  guides(color = "none") +
+  labs(title = "台灣收入分配不均的指標",
+       x = " ",
+       y = "收入分配不均的指標直")
+ggsave("/Users/sharedcomputer/MMT in Taiwan/Blog Photos/Measures of Income Inequality for Taiwan_zh.jpg")
+```
+
+```{r tw_savings_fig, fig.showtext = TRUE}
+tw_inequality_df <- read_csv(url(inequality_url))[, -c(8:9)] %>%
+  gather("quintile", "value", -c(Year, Metric))
+
+tw_inequality_df %>%
+  filter(!str_detect(Metric, "Percent distribution")) %>%
+  ggplot(aes(x = Year, y = value, color = quintile)) +
+  geom_line() +
+  geom_dl(aes(label = quintile), method = list("last.points", cex = 0.8)) +
+  scale_color_viridis_d(guide = "none") +
+  scale_y_continuous(labels = dollar) +
+  scale_x_continuous(expand = expand_scale(mult = c(0,0.14))) +
+  labs(title = "Average Savings per Household by Income Quintile in Taiwan",
+       x = " ",
+       y = "Average Savings per Household in NT$")
+ggsave("/Users/sharedcomputer/MMT in Taiwan/Blog Photos/Average Savings per Household in Taiwan.jpg")
+
+quintile_translation <- tibble(quintile = unique(tw_inequality_df$quintile),
+                               zh_quint = c("最低20%","第二20%","第三20%","第四20%","最高20%"))
+
+tw_inequality_df %>%
+  filter(!str_detect(Metric, "Percent distribution")) %>%
+  left_join(quintile_translation, by = "quintile") %>%
+  ggplot(aes(x = Year, y = value, color = zh_quint)) +
+  geom_line() +
+  geom_dl(aes(label = zh_quint), method = list("last.points", cex = 0.8)) +
+  scale_color_viridis_d(guide = "none") +
+  scale_y_continuous(labels = dollar) +
+  scale_x_continuous(expand = expand_scale(mult = c(0,0.14))) +
+  labs(title = "台灣戶數五等分位組之平均每戶儲蓄",
+       x = " ",
+       y = "平均每戶儲蓄 (新台幣)")
+ggsave("/Users/sharedcomputer/MMT in Taiwan/Blog Photos/Average Savings per Household in Taiwan_zh.jpg")
+```
+
+
+```{r tw_earnings_fig, fig.showtext = TRUE}
+earnings_urlfile <- "https://raw.githubusercontent.com/dorseytf/TaiwanMMT/master/Taiwan%20Earnings%20Data.csv"
+
+tw_earnings_data <- read_csv(url(earnings_urlfile)) %>%
+  clean_names() %>%
+  filter(!is.na(metric)) %>%
+  separate(year_and_month, c("year", "month")) %>%
+  mutate(day = ifelse(month == "FEB", "28", "30")) %>%
+  mutate(date = paste(year, month, day, sep = "-")) %>%
+  mutate(date = ymd(date)) %>%
+  select(-c(year, month, day))
+
+earnings_ts <- ts(tw_earnings_data$statistical_value[which(tw_earnings_data$metric == "Monthly Real Earnings(NT)")],
+                  frequency = 12,
+                  start = c(1980, 1))
+
+earnings_trend <- decompose(earnings_ts)$trend
+
+ts_df(earnings_trend) %>%
+  filter(!is.na(value)) %>%
+  ggplot(aes(x = time, y = value)) +
+  geom_line() +
+  scale_y_continuous(labels = dollar) +
+  labs(title = "台灣人每月實際收入",
+       subtitle = "季節性調整; 工業及服務業",
+       caption = "資料來願: 行政院主計總處",
+       x = " ",
+       y = "每月實際收入 (新台幣)")
+ggsave("/Users/sharedcomputer/MMT in Taiwan/Blog Photos/Real Monthly Earnings in Taiwan_zh.jpg")
+
+ts_df(earnings_trend) %>%
+  filter(!is.na(value)) %>%
+  ggplot(aes(x = time, y = value)) +
+  geom_line() +
+  scale_y_continuous(labels = dollar) +
+  labs(title = "Real Monthly Earnings in Taiwan",
+       subtitle = "Seasonally Adjusted; Industry and Service Sectors",
+       caption = "Data source: Directorate-General of Budget, Accounting and Statistics",
+       x = " ",
+       y = "Real Monthly Earnings (in NT$)")
+ggsave("/Users/sharedcomputer/MMT in Taiwan/Blog Photos/Real Monthly Earnings in Taiwan.jpg")
+```
+
+
+```{r tw_hmm, fig.showtext = TRUE}
+tw_housing_url <- "https://raw.githubusercontent.com/dorseytf/TaiwanMMT/master/Taiwan%20Housing%20Data.csv"
+
+tw_housing_data <- read_csv(url(tw_housing_url)) %>%
+  clean_names() %>%
+  separate(year_and_quarter, c("year", "qtr"), sep = "Q") %>%
+  mutate(year = as.numeric(year) + 1911,
+         qtr = as.numeric(qtr)) %>%
+  mutate(time = paste0(year, ":Q", qtr)) %>%
+  mutate(time = lubridate::yq(time)) %>%
+  select(-c(year, qtr)) %>%
+  gather("locality", "value", -c(metric, time)) %>%
+  mutate(locality = gsub("_", " ", locality)) %>%
+  mutate(locality = str_to_title(locality))
+
+tw_housing_data %>%
+  filter(metric == "Housing Median Multiple") %>%
+  ggplot(aes(x = time, y = value, color = locality)) +
+  geom_line() +
+  scale_color_viridis_d(name = "Locality") +
+  labs(title = "Quarterly Housing Median Multiple for Taiwan and Taipei City",
+       x = " ",
+       y = "Housing Median Multiple")
+ggsave("Blog Photos/Quarterly Housing Median Multiple for Taiwan.jpg")
+
+locality_translation <- tibble(locality  = unique(tw_housing_data$locality),
+                               zh_locale = c("全國", "台北市"))
+
+housing_metric_translation <- tibble(metric = unique(tw_housing_data$metric),
+                                     zh_metric = c("房價中位數倍數",
+                                                   "貸款負擔率",
+                                                   "房價所得比"))
+
+tw_housing_data %>%
+  filter(metric == "Housing Median Multiple") %>%
+  left_join(housing_metric_translation, by = "metric") %>%
+  left_join(locality_translation, by = "locality") %>%
+  ggplot(aes(x = time, y = value, color = zh_locale)) +
+  geom_line() +
+  scale_color_viridis_d(name = "地方") +
+  labs(title = "台灣全國以及台北市的季度房價中位數倍數",
+       x = " ",
+       y = "房價中位數倍數")
+ggsave("/Users/sharedcomputer/MMT in Taiwan/Blog Photos/Quarterly Housing Median Multiple for Taiwan_zh.jpg")
+
+```
+
+
+```{r tw_housing_ratio, fig.showtext = TRUE}
+tw_housing_data %>%
+  filter(!metric %in% c("Housing Median Multiple")) %>%
+  left_join(housing_metric_translation, by = "metric") %>%
+  left_join(locality_translation, by = "locality") %>%
+  ggplot(aes(x = time, y = value, color = zh_locale)) + 
+  geom_line() +
+  facet_wrap(~zh_metric, scales = "free") +
+  scale_color_viridis_d(name = "地方") +
+  labs(title = "台灣房價所得比以及貸款負擔率",
+       x = " ",
+       y = "比率")
+ggsave("/Users/sharedcomputer/MMT in Taiwan/Blog Photos/Taiwan Housing Ratios_zh.jpg")
+```
+
